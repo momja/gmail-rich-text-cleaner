@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Rich Text Formatter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Specific overrides to match Gmail's default composition style */
+        .gmail-editor {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: small; /* Matches Gmail default */
+            line-height: 1.5;
+        }
+        
+        /* Ensure the editor looks like a text box */
+        .editor-box:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.4);
+            border-color: #1a73e8;
+        }
+
+        /* Gmail uses divs for paragraphs, so we style them to look normal in the editor */
+        .gmail-editor div {
+            min-height: 1em; /* Allow empty lines to be visible */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-white w-full max-w-3xl rounded-lg shadow-xl overflow-hidden">
+        <!-- Header -->
+        <div class="bg-white border-b border-gray-200 p-6 flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                    <i class="fa-solid fa-envelope text-red-500"></i>
+                    Gmail Rich Text Cleaner
+                </h1>
+                <p class="text-gray-500 text-sm mt-1">Paste formatted text below to sanitize it for Gmail.</p>
+            </div>
+            <div class="text-xs text-gray-400 text-right hidden sm:block">
+                Converts &lt;h1&gt; to Huge, &lt;h2&gt; to Large<br>
+                Preserves bold/normal mix in headings
+            </div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="bg-gray-50 px-6 py-3 border-b border-gray-200 flex flex-wrap gap-2 items-center">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider mr-2">Actions:</span>
+            
+            <button onclick="processContent()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition flex items-center gap-2 shadow-sm">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Clean & Format
+            </button>
+            
+            <button onclick="copyToClipboard()" id="copy-btn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium transition flex items-center gap-2 shadow-sm opacity-50 cursor-not-allowed" disabled>
+                <i class="fa-regular fa-copy"></i> Copy for Gmail
+            </button>
+
+            <button onclick="clearEditor()" class="ml-auto text-gray-400 hover:text-red-500 transition" title="Clear All">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+
+        <!-- Editor Container -->
+        <div class="p-6 bg-white">
+            <label class="block text-xs font-bold text-gray-400 uppercase mb-2">Editor Preview</label>
+            <div 
+                id="input-area" 
+                contenteditable="true" 
+                class="gmail-editor editor-box w-full min-h-[300px] border border-gray-300 rounded-md p-4 bg-white overflow-y-auto"
+                placeholder="Paste your content here..."
+            ></div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="bg-gray-50 px-6 py-3 border-t border-gray-200 flex justify-between items-center">
+            <div id="status-msg" class="text-sm font-medium text-gray-600">
+                Ready. Paste text above.
+            </div>
+            <div class="text-xs text-gray-400">
+                Supports: Headings, Indents, Links, Lists
+            </div>
+        </div>
+
+        <!-- Feature Explainer -->
+        <div class="bg-blue-50 p-6 border-t border-blue-100 text-sm text-gray-700">
+            <h3 class="font-bold text-blue-800 mb-3 flex items-center"><i class="fa-solid fa-circle-info mr-2"></i>What this cleaner does:</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+                <ul class="list-disc pl-4 space-y-1">
+                    <li><strong>Headings:</strong> Converts H1/H2 to size attributes without forcing bold.</li>
+                    <li><strong>Structure:</strong> Replaces <code>&lt;p&gt;</code>/<code>&lt;hX&gt;</code> with <code>&lt;div&gt;</code>.</li>
+                    <li><strong>Lists:</strong> Flattens nested blocks inside bullets for clean <code>&lt;li&gt;</code> tags.</li>
+                </ul>
+                <ul class="list-disc pl-4 space-y-1">
+                    <li><strong>Clean:</strong> Removes redundant "Arial" and "Normal size" styles.</li>
+                    <li><strong>Legacy:</strong> Maps CSS sizes/colors to <code>&lt;font&gt;</code> tags.</li>
+                    <li><strong>Sanitize:</strong> Strips <code>dir="ltr"</code>, classes, IDs, and <strong>all</strong> spans.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const inputArea = document.getElementById('input-area');
+    const statusMsg = document.getElementById('status-msg');
+    const copyBtn = document.getElementById('copy-btn');
+
+    // Add placeholder behavior via JS since contenteditable doesn't support it natively well in all browsers with CSS
+    inputArea.addEventListener('focus', function() {
+        if (this.innerHTML.trim() === '<br>' || this.textContent.trim() === '') {
+            // keep it clean
+        }
+    });
+
+    function clearEditor() {
+        inputArea.innerHTML = '';
+        updateStatus("Editor cleared.", "gray");
+        disableCopy();
+    }
+
+    function disableCopy() {
+        copyBtn.disabled = true;
+        copyBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+
+    function enableCopy() {
+        copyBtn.disabled = false;
+        copyBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+
+    function updateStatus(msg, colorType) {
+        statusMsg.textContent = msg;
+        statusMsg.className = "text-sm font-medium"; // reset
+        if (colorType === 'success') statusMsg.classList.add('text-green-600');
+        else if (colorType === 'error') statusMsg.classList.add('text-red-600');
+        else if (colorType === 'processing') statusMsg.classList.add('text-blue-600');
+        else statusMsg.classList.add('text-gray-600');
+    }
+
+    // Helper to map CSS font-size to HTML <font size="x">
+    // Returns null if the size is "Normal" (2) to avoid redundant tags
+    function mapFontSize(cssValue) {
+        if (!cssValue) return null;
+        
+        let px = 0;
+        if (cssValue.endsWith('px')) px = parseFloat(cssValue);
+        else if (cssValue.endsWith('pt')) px = parseFloat(cssValue) * 1.33;
+        else if (cssValue.endsWith('em')) px = parseFloat(cssValue) * 16;
+        else if (cssValue.endsWith('rem')) px = parseFloat(cssValue) * 16;
+        
+        // Keywords
+        if (cssValue.includes('small') && !cssValue.includes('x-')) return "1"; 
+        if (cssValue.includes('medium')) return null; // Default, do not tag
+        if (cssValue.includes('large') && !cssValue.includes('x-')) return "4"; 
+        if (cssValue.includes('x-large') || cssValue.includes('huge')) return "6"; 
+
+        // Pixel Ranges (Mapped to Gmail's internal logic roughly)
+        if (px < 12) return "1"; 
+        if (px >= 12 && px < 18) return null; // 12-17px is considered "Normal", do not tag
+        if (px >= 18 && px < 24) return "4"; // Large
+        if (px >= 24) return "6"; // Huge
+        
+        return null; // Default
+    }
+
+    function processContent() {
+        if (!inputArea.innerText.trim() && !inputArea.innerHTML.includes('<img')) {
+            updateStatus("Please paste some text first.", "error");
+            return;
+        }
+
+        updateStatus("Formatting...", "processing");
+
+        let html = inputArea.innerHTML;
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const body = doc.body;
+
+        // PRE-PROCESSING: Remove junk attributes globally
+        const allNodes = body.getElementsByTagName('*');
+        for (let i = 0; i < allNodes.length; i++) {
+            allNodes[i].removeAttribute('dir'); // Removes dir="ltr"
+        }
+
+        // A. Convert Headings to Divs (Gmail Compatibility)
+        // H1 -> Huge, H2 -> Large
+        // NOTE: We do NOT enforce bold here. Gmail headings are just sizes.
+        // If the user wants bold, it usually comes from the source HTML tags inside the H1.
+        const headings = body.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        headings.forEach(h => {
+            const div = doc.createElement('div');
+            
+            // Move content directly (preserve existing B/Strong tags inside)
+            div.innerHTML = h.innerHTML;
+
+            // CLEANUP: If we are enforcing a Heading Size, we should strip conflicting
+            // font-sizes from children to prevent "Huge text with Normal spans inside"
+            // This ensures clean output for mixed bold/normal headings.
+            const children = div.querySelectorAll('*');
+            children.forEach(child => {
+                if (child.style && child.style.fontSize) {
+                    child.style.fontSize = ''; 
+                    // If style is empty, remove it to clean up markup
+                    if (child.getAttribute('style') === '') child.removeAttribute('style');
+                }
+            });
+
+            const tag = h.tagName.toLowerCase();
+            
+            // Apply size styles to the container
+            if (tag === 'h1') {
+                div.style.fontSize = '24px'; // Maps to Size 6
+            } else if (tag === 'h2') {
+                div.style.fontSize = '18px'; // Maps to Size 4
+            }
+            // H3-H6 left as default size (Normal)
+
+            // Preserve alignment
+            if (h.style.textAlign) div.style.textAlign = h.style.textAlign;
+            
+            h.replaceWith(div);
+        });
+
+        // B. Unwrap block containers that break Gmail flow
+        const structuralTags = ['article', 'section', 'aside', 'main', 'figure'];
+        structuralTags.forEach(tag => {
+            const elements = body.querySelectorAll(tag);
+            elements.forEach(el => {
+                const div = doc.createElement('div');
+                div.innerHTML = el.innerHTML;
+                el.replaceWith(div);
+            });
+        });
+
+        // C. Flatten List Items (CRITICAL for clean output)
+        body.querySelectorAll('li').forEach(li => {
+            if (li.style.textDecoration) li.style.textDecoration = '';
+            
+            const blocks = li.querySelectorAll('div, p');
+            blocks.forEach(block => {
+                 const parent = block.parentNode;
+                 while (block.firstChild) parent.insertBefore(block.firstChild, block);
+                 parent.removeChild(block);
+            });
+        });
+
+        // D. Convert <p> to <div> (Gmail preference)
+        const paragraphs = body.querySelectorAll('p');
+        paragraphs.forEach(p => {
+            const div = doc.createElement('div');
+            if (p.innerHTML.trim() === "") {
+                div.innerHTML = "<br>";
+            } else {
+                div.innerHTML = p.innerHTML;
+            }
+            if (p.style.textAlign) div.style.textAlign = p.style.textAlign;
+            if (p.style.marginLeft) div.style.marginLeft = p.style.marginLeft;
+            p.replaceWith(div);
+        });
+
+        // E. Standardize Semantic Tags
+        body.querySelectorAll('strong').forEach(el => { const b = doc.createElement('b'); b.innerHTML = el.innerHTML; el.replaceWith(b); });
+        body.querySelectorAll('em').forEach(el => { const i = doc.createElement('i'); i.innerHTML = el.innerHTML; el.replaceWith(i); });
+
+        // F. Clean Attributes & Preserve Supported Styles
+        const allElements = body.getElementsByTagName("*");
+        for (let i = 0; i < allElements.length; i++) {
+            const el = allElements[i];
+            
+            el.removeAttribute('class');
+            el.removeAttribute('id');
+            el.removeAttribute('data-testid');
+            
+            if(el.hasAttribute('style')){
+                const style = el.getAttribute('style').toLowerCase();
+                let newStyle = [];
+                
+                // --- Allowed Styles in Gmail ---
+
+                // Font Family
+                if(style.includes('font-family')) {
+                    const fam = el.style.fontFamily.toLowerCase();
+                    if (!fam.includes('arial') && !fam.includes('sans-serif') && !fam.includes('helvetica')) {
+                        newStyle.push("font-family: " + el.style.fontFamily);
+                    }
+                }
+
+                if(style.includes('font-size')) newStyle.push("font-size: " + el.style.fontSize);
+                if(style.includes('text-align')) newStyle.push("text-align: " + el.style.textAlign);
+                if(style.includes('margin-left')) newStyle.push("margin-left: " + el.style.marginLeft);
+                
+                // Text Decoration (Underline)
+                if(style.includes('text-decoration')) {
+                    const dec = el.style.textDecoration;
+                    if (dec !== 'none') newStyle.push("text-decoration: " + dec);
+                }
+
+                // Font Weight (Bold) - Ensure we keep explicit weights!
+                if(style.includes('font-weight')) {
+                   const weight = el.style.fontWeight;
+                   if (weight === 'bold' || weight === '700' || weight === '800' || weight === '900') {
+                       newStyle.push("font-weight: bold");
+                   }
+                }
+                
+                if (newStyle.length > 0) {
+                    el.setAttribute('style', newStyle.join('; ') + ';');
+                } else {
+                    el.removeAttribute('style');
+                }
+            }
+        }
+
+        // G. Convert Spans/Inline Styles to Gmail Tags
+        const styledElements = body.querySelectorAll('*[style]');
+        styledElements.forEach(el => {
+            const style = el.style;
+            
+            // 1. Handle Underline
+            if (style.textDecoration.includes('underline')) {
+                const u = doc.createElement('u');
+                u.innerHTML = el.innerHTML;
+                el.innerHTML = '';
+                el.appendChild(u);
+                style.textDecoration = style.textDecoration.replace('underline', '').trim();
+                if (style.length === 0) el.removeAttribute('style');
+            }
+
+            // 2. Handle Bold (Font Weight)
+            // This catches <span style="font-weight:bold"> and converts to <b>
+            if (style.fontWeight === 'bold') {
+                const b = doc.createElement('b');
+                // If it's a block element (div/li), we can't just replace it. We wrap contents.
+                const isBlock = el.tagName.toLowerCase() === 'div' || el.tagName.toLowerCase() === 'li';
+                
+                if (isBlock) {
+                    // Move children safely instead of using innerHTML
+                    while (el.firstChild) {
+                        b.appendChild(el.firstChild);
+                    }
+                    el.appendChild(b);
+                } else {
+                    // For inline elements (span), if this is the ONLY style, replace.
+                    // If mixed with color/font, wrap content.
+                    
+                    // Move children safely
+                    while (el.firstChild) {
+                        b.appendChild(el.firstChild);
+                    }
+                    
+                    // If we are replacing the element entirely (unlikely here if mixed styles, but needed for pure replacement)
+                    // Actually for span, we usually Append the B to the Span, then clean the span.
+                    // But if we want to preserve the span for OTHER styles, we append B to Span.
+                    el.appendChild(b);
+                }
+                
+                el.style.fontWeight = '';
+                if (el.getAttribute('style') === '') el.removeAttribute('style');
+            }
+
+            // 3. Handle Font Settings
+            const isBlock = el.tagName.toLowerCase() === 'div' || el.tagName.toLowerCase() === 'li';
+            const hasFontProps = style.fontFamily || style.fontSize;
+
+            if (hasFontProps) {
+                const font = doc.createElement('font');
+                let usedFontTag = false;
+                
+                if (style.fontFamily) { 
+                    font.setAttribute('face', style.fontFamily); 
+                    usedFontTag = true; 
+                }
+                
+                if (style.fontSize) { 
+                    const mappedSize = mapFontSize(style.fontSize);
+                    if (mappedSize) {
+                        font.setAttribute('size', mappedSize); 
+                        usedFontTag = true; 
+                    }
+                }
+
+                if (usedFontTag) {
+                    if (isBlock) {
+                        // CRITICAL FIX: Move children to preserve references instead of innerHTML
+                        while (el.firstChild) {
+                            font.appendChild(el.firstChild);
+                        }
+                        el.appendChild(font);
+                        
+                        el.style.fontFamily = '';
+                        el.style.fontSize = '';
+                        if (el.getAttribute('style') === '') el.removeAttribute('style');
+                    } else if (el.tagName.toLowerCase() === 'span') {
+                        // Complete replacement for spans
+                        // We must move children here too if we want to be 100% safe, 
+                        // though replaceWith usually handles this well.
+                        
+                        // Copy content
+                        while (el.firstChild) {
+                            font.appendChild(el.firstChild);
+                        }
+                        el.replaceWith(font);
+                    }
+                } else {
+                    // Remove default styles without wrapping
+                    if (style.fontFamily) el.style.fontFamily = '';
+                    if (style.fontSize) el.style.fontSize = '';
+                    if (el.getAttribute('style') === '') el.removeAttribute('style');
+                }
+            }
+        });
+
+        // H. Final Cleanup
+        // Aggressively strip ALL remaining <span> tags
+        // (Any meaningful styles should have been converted to b/i/u/font/div by now)
+        // This unwraps the spans but PRESERVES the content (including <b> tags).
+        const spans = Array.from(body.querySelectorAll('span'));
+        spans.forEach(span => {
+            const parent = span.parentNode;
+            if (parent) {
+                while (span.firstChild) parent.insertBefore(span.firstChild, span);
+                parent.removeChild(span);
+            }
+        });
+
+        inputArea.innerHTML = body.innerHTML;
+        updateStatus("Formatted! Cleaned for Gmail.", "success");
+        enableCopy();
+    }
+
+    async function copyToClipboard() {
+        if (copyBtn.disabled) return;
+
+        const originalBtnText = copyBtn.innerHTML;
+        copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        
+        try {
+            const content = inputArea.innerHTML;
+            const textContent = inputArea.innerText;
+
+            const blobHtml = new Blob([content], { type: "text/html" });
+            const blobText = new Blob([textContent], { type: "text/plain" });
+
+            const data = [new ClipboardItem({
+                ["text/html"]: blobHtml,
+                ["text/plain"]: blobText
+            })];
+
+            await navigator.clipboard.write(data);
+            updateStatus("Copied to clipboard!", "success");
+
+        } catch (err) {
+            console.warn("Clipboard API failed, falling back to execCommand", err);
+            inputArea.focus();
+            document.execCommand('selectAll', false, null);
+            document.execCommand('copy');
+            window.getSelection().removeAllRanges();
+            updateStatus("Copied via fallback!", "success");
+        }
+
+        setTimeout(() => {
+            copyBtn.innerHTML = originalBtnText;
+        }, 2000);
+    }
+</script>
+
+</body>
+</html>
